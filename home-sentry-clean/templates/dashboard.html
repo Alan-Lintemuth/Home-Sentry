@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sentry Live Shield</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7fa; margin: 0; padding: 40px; color: #333; }
+        .container { max-width: 900px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+        h1 { color: #2c3e50; border-bottom: 2px solid #ecf0f1; padding-bottom: 10px; margin-top: 0; }
+        .controls { display: flex; gap: 15px; margin-bottom: 25px; align-items: center; }
+        select { padding: 10px; border-radius: 6px; border: 1px solid #bdc3c7; flex-grow: 1; font-size: 16px; }
+        button { padding: 10px 20px; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; font-weight: bold; transition: 0.2s; color: white;}
+        .btn-scan { background-color: #3498db; }
+        .btn-scan:hover { background-color: #2980b9; }
+        .btn-start { background-color: #2ecc71; }
+        .btn-start:hover { background-color: #27ae60; }
+        .btn-stop { background-color: #e74c3c; }
+        .btn-stop:hover { background-color: #c0392b; }
+        .btn:disabled { background-color: #95a5a6; cursor: not-allowed; }
+        
+        .status-window { padding: 30px; border-radius: 8px; text-align: center; margin-bottom: 25px; transition: background-color 0.3s; background-color: #ecf0f1; border: 2px solid #bdc3c7;}
+        .status-window.safe { background-color: #e8f8f5; border-color: #2ecc71; color: #27ae60; }
+        .status-window.malicious { background-color: #fdedec; border-color: #e74c3c; color: #c0392b; animation: flash 1s infinite alternate; }
+        
+        @keyframes flash { from { background-color: #fdedec; } to { background-color: #fadbd8; } }
+        
+        .stats { display: flex; justify-content: space-around; font-size: 18px; font-weight: bold; color: #7f8c8d; }
+        .stat-box { background: #f8f9f9; padding: 15px 30px; border-radius: 8px; border: 1px solid #ecf0f1; text-align: center; width: 45%;}
+        .stat-value { display: block; font-size: 24px; color: #2c3e50; margin-top: 5px;}
+
+        /* --- NEW TABLE STYLES --- */
+        .table-container { margin-top: 25px; max-height: 350px; overflow-y: auto; border: 1px solid #bdc3c7; border-radius: 8px; background: white;}
+        table { width: 100%; text-align: left; border-collapse: collapse; font-size: 14px; }
+        th, td { padding: 10px 15px; border-bottom: 1px solid #ecf0f1; }
+        th { position: sticky; top: 0; background-color: #f8f9f9; border-bottom: 2px solid #bdc3c7; color: #2c3e50;}
+        .row-okay { background-color: #ffffff; }
+        .row-malicious { background-color: #fdedec; color: #c0392b; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🛡️ Sentry Live Shield</h1>
+    
+    <div class="controls">
+        <button class="btn-scan" id="scanBtn" onclick="scanNetworks()">1. Scan Airwaves (10s)</button>
+        <select id="networkSelect">
+            <option value="">Awaiting scan...</option>
+        </select>
+        <button class="btn-start" id="startBtn" onclick="startCapture()" disabled>2. Start Shield</button>
+        <button class="btn-stop" id="stopBtn" onclick="stopCapture()" disabled>Stop</button>
+        <button onclick="killApp()" style="background-color: darkred; color: white;">Power Off System</button>
+    </div>
+
+    <div class="status-window" id="statusWindow">
+        <h2 id="statusText" style="margin: 0; font-size: 28px;">System Offline</h2>
+        <p id="messageText" style="margin-top: 10px; font-size: 16px;">Awaiting target selection.</p>
+    </div>
+
+    <div class="stats">
+        <div class="stat-box">Packets Scanned <span class="stat-value" id="pktCount">0</span></div>
+        <div class="stat-box">Attacks Detected <span class="stat-value" id="atkCount">0</span></div>
+    </div>
+
+    <div class="table-container">
+        <table id="results-table">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Source MAC</th>
+                    <th>Info</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody id="packet-log-body">
+                <tr><td colspan="4" style="text-align: center; color: #7f8c8d;">System Offline. No packets captured yet.</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    let isPolling = false; // Replaces pollInterval to prevent spam
+
+    async function scanNetworks() {
+        const btn = document.getElementById('scanBtn');
+        const select = document.getElementById('networkSelect');
+        btn.innerText = "Scanning..."; btn.disabled = true;
+        
+        try {
+            const response = await fetch('/scan');
+            const networks = await response.json();
+            
+            select.innerHTML = '';
+            if(networks.length === 0) {
+                select.innerHTML = '<option value="">No networks found.</option>';
+            } else {
+                networks.forEach(net => {
+                    const opt = document.createElement('option');
+                    opt.value = net.bssid;
+                    
+                    // --- NEW HEX TRANSLATOR LOGIC ---
+                    let readableSsid = net.ssid;
+                    // Check if the SSID is purely a hex string
+                    if (/^[0-9a-fA-F]+$/.test(net.ssid)) {
+                        let str = '';
+                        for (let i = 0; i < net.ssid.length; i += 2) {
+                            str += String.fromCharCode(parseInt(net.ssid.substr(i, 2), 16));
+                        }
+                        readableSsid = str; // Replace hex with human-readable text
+                    }
+                    
+                    // Display the translated text
+                    opt.innerText = `${readableSsid} (${net.bssid})`;
+                    select.appendChild(opt);
+                });
+                document.getElementById('startBtn').disabled = false;
+            }
+        } catch (err) {
+            console.error("Scan failed", err);
+            alert("Failed to scan. Check Flask logs.");
+        } finally {
+            btn.innerText = "1. Rescan Airwaves"; btn.disabled = false;
+        }
+    } 
+
+    async function startCapture() {
+        const bssid = document.getElementById('networkSelect').value;
+        if(!bssid) return alert("Select a network first.");
+
+        await fetch('/start', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({bssid: bssid})
+        });
+
+        document.getElementById('startBtn').disabled = true;
+        document.getElementById('stopBtn').disabled = false;
+        document.getElementById('scanBtn').disabled = true;
+        
+        // Start safe polling
+        isPolling = true;
+        fetchStatus(); 
+    }
+
+    async function stopCapture() {
+        // Stop polling immediately
+        isPolling = false; 
+
+        await fetch('/stop', {method: 'POST'});
+        
+        document.getElementById('startBtn').disabled = false;
+        document.getElementById('stopBtn').disabled = true;
+        document.getElementById('scanBtn').disabled = false;
+        
+        // One final UI update to show "Offline"
+        fetchStatus(true); 
+    }
+    
+    async function killApp() {
+        // Double-check with the user so they don't accidentally click it
+        if(confirm("Are you sure you want to power off Sentry Live Shield? This will terminate the server.")) {
+            
+            // Disable everything on the page so the user knows it's working
+            document.getElementById('scanBtn').disabled = true;
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = true;
+            document.getElementById('networkSelect').disabled = true;
+            isPolling = false; // Stop trying to fetch the status
+
+            try {
+                // Send the kill signal to our new Flask route
+                await fetch('/shutdown', { method: 'POST' });
+            } catch (err) {
+                // We actually EXPECT this to fail because the server dies before it can respond
+                console.log("Server shut down successfully.");
+            }
+            
+            // Wipe the screen and give a visual confirmation
+            document.body.innerHTML = `
+                <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background-color: #f4f7f6; font-family: sans-serif;">
+                    <h1 style="color: #c0392b; font-size: 3rem; margin-bottom: 10px;">🛡️ System Offline</h1>
+                    <p style="color: #7f8c8d; font-size: 1.2rem;">The Sentry server has been safely terminated.</p>
+                    <p style="color: #7f8c8d; font-size: 1.2rem;">You may now close this tab.</p>
+                </div>
+            `;
+        }
+    }
+
+    async function fetchStatus(isFinalUpdate = false) {
+        try {
+            const res = await fetch('/status');
+            const data = await res.json();
+            
+            // Update Stats
+            document.getElementById('pktCount').innerText = data.packets ? data.packets.toLocaleString() : "0";
+            document.getElementById('atkCount').innerText = data.attacks ? data.attacks.toLocaleString() : "0";
+            document.getElementById('messageText').innerText = data.message || "";
+            
+            // Update Window Color
+            const win = document.getElementById('statusWindow');
+            const statusText = document.getElementById('statusText');
+            
+            win.className = 'status-window'; 
+            if (data.status === "Safe") {
+                win.classList.add("safe");
+                statusText.innerText = "Traffic Normal";
+            } else if (data.status === "Malicious" || data.status === "Malicious 🚨") {
+                win.classList.add("malicious");
+                let conf = data.confidence ? (data.confidence * 100).toFixed(1) : "0.0";
+                statusText.innerText = `🚨 ATTACK DETECTED! (Conf: ${conf}%)`;
+            } else {
+                statusText.innerText = "System Offline";
+            }
+
+            // --- POPULATE THE TABLE ---
+            const tbody = document.getElementById('packet-log-body');
+            if (data.logs && data.logs.length > 0) {
+                tbody.innerHTML = ''; 
+                // Loop backwards to show newest first
+                for (let i = data.logs.length - 1; i >= 0; i--) {
+                    const log = data.logs[i];
+                    const tr = document.createElement('tr');
+                    
+                    if (log.status && log.status.includes("MALICIOUS")) {
+                        tr.className = "row-malicious";
+                    } else {
+                        tr.className = "row-okay";
+                    }
+
+                    tr.innerHTML = `
+                        <td>${log.time}</td>
+                        <td>${log.mac}</td>
+                        <td>${log.info}</td>
+                        <td>${log.status}</td>
+                    `;
+                    tbody.appendChild(tr);
+                }
+            } else if (!isPolling) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: #7f8c8d;">System Offline. No packets captured yet.</td></tr>';
+            }
+
+        } catch (err) {
+            console.error("Status fetch failed", err);
+        } finally {
+            // Only trigger the next check if the shield is still running
+            if (isPolling && !isFinalUpdate) {
+                setTimeout(fetchStatus, 800); // Waits 800ms AFTER getting the last data
+            }
+        }
+    }
+</script>
+
+</body>
+</html>
